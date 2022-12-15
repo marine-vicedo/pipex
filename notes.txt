@@ -1,0 +1,166 @@
+terminal sous bash
+
+commandes : nm -u (pur voir les fonctions de lib standard utilisees)
+
+A corriger
+valgrind ./pipex infile "touch Z3T" ls outfile
+>> si openfile echoue, il faut free data.paths > OK
+
+env -i valgrind ./pipex /dev/stdin "/usr/bin/cat" "/usr/bin/ls" /dev/stdout
+
+pbm >heredoc
+./pipex_bonus here_doc a cat "grep h" outfile
+commande ctrl D > ecrit heredoc
+
+Syscall param execve(filename) points to unaddressable byte(s)
+==943053==    at 0x495F0FB: execve (syscall-template.S:120)
+
+
+prototype execve
+int execve(const char *pathname, char *const argv[], char *const envp[])
+pathname : chemin acces du prog/ which ls 
+argv[] : option du prog (ls -la)
+envp[] : environment pointer
+
+$ env | grep "PATH"
+PATH=/mnt/nfs/homes/mvicedo/bin:/mnt/nfs/homes/mvicedo/bin:/mnt/nfs/homes/mvicedo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+
+STDIN_FILENO is a file descriptor
+
+-------------------------------------------------------------------
+On doit reproduire
+< file1 cmd1 | cmd2 > file2
+(( file1 > cmd1 | cmd2 > file 2))
+
+------------------------------
+./pipex file1 cmd1 cmd2 file2
+-------------------------------
+partie obligatoire : minimum 5 argc
+
+----------------------------------------
+./pipex here_doc LIMITER cmd cmd1 file
+----------------------------------------
+partie bonus : ajout de "here_doc"
+cmd << LIMITER | cmd1 >> file
+
+----------------------------------------------
+./pipex file1 cmd1 cmd2 cmd3 ... cmdn file2
+------------------------------------------------
+partie bonus : ajout de multiples cmds (multi pipes)
+< file1 cmd1 | cmd2 | cmd3 ... | cmdn > file2
+
+main : Launches d structure initialization and starts pipex.
+Returns the last child's exit code as pipex's exit code.
+
+Check parsing
+-> declarer struct data
+-> check nb d'arguments en entree 
+si ac < 5 (partie obligatoire et bonus)
+-----> si ac < 5 == error
+-----> pour bonus -> si ac >= 2 et manque "here_doc" en argv[1] (len = 9) == error
+
+si ac < 6 et et manque "here_doc" en argv[1] (len = 9) == error
+
+si il manque env == error
+
+si tout ok, on init la struct
+puis pipex
+
+init struct
+init aux valeurs par defaut;
+
+/* clean_init:
+*	Initializes a data structure with no data in it. Sets strings to NULL
+*	and ints to -1, because 0 is a valid fd and should not be used for
+*	initialization.
+*	Returns the newly initialized data structure.
+
+/* init:
+*	Initializes a new data structure to hold pipex information. Stores the
+*	arguments, the environment pointer, opens the input fd and opens/creates
+*	the output fd.
+*	Returns the data structure.
+*/
+
+data->envp
+data->ac
+data->av
+data->heredoc = 0 OU data->heredoc = 1 (si existe)
+data->fdin (open infile)
+data->fdout (open outfile)
+data->nb_cmds = argc - 3 - data->heredoc
+----
+Nb de childs = nb de cmds
+data.pids = malloc(sizeof * data.pids * data.nb_cmds); >> 
+if (!data.pids)
+	exit_error(msg("PID error", strerror(errno), "", 1), &data);
+----
+Nb de pipes = Nb de cmds - 1
+data.pipe = malloc(sizeof * data.pipe * 2 * (data.nb_cmds - 1));
+if (!data.pipe)
+	exit_error(msg("Pipe error", "", "", 1), &data);
+generate_pipes(&data) >> 
+return (data);
+
+
+creer un pipe et fork le nombre de childs necessaires avant d.appeler le parent a attendre
+qu'ils aient fini leur tache. On retourne le dernier exit code du child.
+
+parsing (suite)
+pour pouvoir utiliser la cmd execve : execve("/usr/bin/ls", options, envp);
+
+pour obtenir "options" :
+--> si les cmds ont des options (par exemple "ls -la")
+	utiliser split pour decouper et obtenir les options avec en parametre : l'ensemble des args (sans le prog)
+ et '' comme sep
+ ./pipex file1 cmd1 cmd2 cmd3 ... cmdn file2
+ ./pipex file1 ls -la grep wc-l file2
+	ex : char *options[3] = {"ls", "-la", NULL};
+
+pour obtenir le path de la commande :
+--> recuperer le cmd path 
+
+puis fork et creation des childs :
+creer les 2 child process (1 pour chaque commande, on garde le parent pour notre programme principal)
+parent = prog
+child 1 = cmd 1
+child 2 = cmd2
+-----> Nb de childs = nb de cmds
+proteger si pas de cmd ou pas de path / si execve == -1
+
+creer un processus wait pour les pids parent (quand pid != 0)
+fermer les fds de infile et outfile
+waitpid chaque child
+
+-----------------
+
+pipe()
+ |
+ |-- fork()
+      |
+      |-- child // cmd1
+      :     |--dup2()
+      :     |--close end[0]
+      :     |--execve(cmd1)
+      :
+      |-- parent // cmd2
+            |--dup2()
+            |--close end[1]
+            |--execve(cmd2)
+
+
+----------------------
+
+    infile                                             outfile
+as stdin for cmd1                                 as stdout for cmd2            
+       |                        PIPE                        ↑
+       |           |---------------------------|            |
+       ↓             |                       |              |
+      cmd1   -->    end[1]       ↔       end[0]   -->     cmd2           
+                     |                       |
+            cmd1   |---------------------------|  end[0]
+           output                             reads end[1]
+         is written                          and sends cmd1
+          to end[1]                          output to cmd2
+       (end[1] becomes                      (end[0] becomes 
+        cmd1 stdout)                           cmd2 stdin)
